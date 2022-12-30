@@ -18,6 +18,7 @@ add_llvm_component_library(LLVMTransformUtils
   CodeMoverUtils.cpp
   CtorUtils.cpp
   DebugCount.cpp
+  DebugRemoval.cpp
   Debugify.cpp
   DemoteRegToStack.cpp
   EntryExitInstrumenter.cpp
