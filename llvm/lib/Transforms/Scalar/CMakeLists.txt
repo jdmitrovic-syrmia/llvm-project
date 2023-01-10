@@ -26,6 +26,7 @@ add_llvm_component_library(LLVMScalarOpts
   JumpThreading.cpp
   LICM.cpp
   LoopAccessAnalysisPrinter.cpp
+  LoopBisect.cpp
   LoopBoundSplit.cpp
   LoopSink.cpp
   LoopDeletion.cpp
