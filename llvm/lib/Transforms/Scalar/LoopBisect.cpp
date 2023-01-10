@@ -12,7 +12,41 @@ using namespace llvm;
 bool LoopBisect::run(Loop &L) const {
     LLVM_DEBUG(dbgs() << "Entering " << __func__ << '\n');
 
-    return false;
+    if(!isCandidate(L)) {
+        LLVM_DEBUG(dbgs() << "Loop: " << L.getName()
+                   << "is not a candidate for bisecting");
+
+        return false;
+    }
+
+    LLVM_DEBUG(dbgs() << "Loop: " << L.getName()
+                << "is a candidate for bisecting");
+
+    return true;
+}
+
+bool LoopBisect::isCandidate(const Loop &L) const {
+    // Loop must be in simplified form in order to be bisected.
+    if(!L.isLoopSimplifyForm())
+        return false;
+
+    // Loop must be cloneable in order to be bisected.
+    if(!L.isSafeToClone())
+        return false;
+
+    // If there are multiple exiting blocks, loop is not a candidate for bisection.
+    if(!L.getExitingBlock())
+        return false;
+
+    // If there are multiple exit blocks, loop is not a candidate for bisection.
+    if(!L.getExitBlock())
+        return false;
+
+    // Only innermost loops are candidates for bisecting.
+    if(!L.getSubLoops().empty())
+        return false;
+
+    return true;
 }
 
 PreservedAnalyses LoopBisectPass::run(Loop &L, LoopAnalysisManager &AM,

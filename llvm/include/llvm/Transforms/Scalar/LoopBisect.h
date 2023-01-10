@@ -16,6 +16,10 @@ public:
 
 private:
     LoopInfo &LI;
+
+    // Determines if a provided loop is a candidate
+    // for bisecting
+    bool isCandidate(const Loop &L) const;
 };
 
 class LoopBisectPass : public PassInfoMixin<LoopBisectPass> {
