@@ -62,7 +62,12 @@ bool LoopBisect::splitLoopInHalf(Loop &L) const {
     const Function &F = *L.getHeader()->getParent();
     DEBUG_WITH_TYPE(VerboseDebug, dumpFunction("After splitting preheader:\n", F));
 
-    // Loop *ClonedLoop =
+    // Clone the original loop and insert the cloned loop before the original.
+    Loop *ClonedLoop = cloneLoop(L, *InsertBefore, *Pred);
+
+    // Modify the upper bound of cloned loop.
+    ICmpInst *LatchCmpInst = getLatchCmpInst(*ClonedLoop);
+    assert(LatchCmpInst && "Unable to find latch instruction in cloned loop");
 
     return true;
 }
@@ -96,6 +101,9 @@ Loop *LoopBisect::cloneLoop(Loop &L, BasicBlock &InsertBefore, BasicBlock &Pred)
     remapInstructionsInBlocks(ClonedLoopBlocks, VMap);
     DEBUG_WITH_TYPE(VerboseDebug,
                     dumpFunction("After instruction remapping:\n", F));
+
+    Pred.getTerminator()->replaceUsesOfWith(&InsertBefore,
+                                            NewLoop->getLoopPreheader());
 
     return NewLoop;
 }
