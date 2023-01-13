@@ -68,6 +68,11 @@ bool LoopBisect::splitLoopInHalf(Loop &L) const {
     // Modify the upper bound of cloned loop.
     ICmpInst *LatchCmpInst = getLatchCmpInst(*ClonedLoop);
     assert(LatchCmpInst && "Unable to find latch instruction in cloned loop");
+    
+    // Modify the lower bound of original loop.
+    PHINode *IndVar = L.getInductionVariable(SE);
+    assert(IndVar && "Unable to find induction variable Phi node");
+    IndVar->setIncomingValueForBlock(L.getLoopPreheader(), Split);
 
     return true;
 }
@@ -106,6 +111,31 @@ Loop *LoopBisect::cloneLoop(Loop &L, BasicBlock &InsertBefore, BasicBlock &Pred)
                                             NewLoop->getLoopPreheader());
 
     return NewLoop;
+}
+
+Instruction *LoopBisect::computeSplitPoint(const Loop &L,
+                                           Instruction *InsertBefore) const {
+    Optional<Loop::LoopBounds> Bounds = L.getBounds(SE);
+    assert(Bounds.has_value() && "Unable to retrieve loop bounds");
+    
+    Value &IVInitial = Bounds->getInitialIVValue();
+    Value &IVFinal = Bounds->getFinalIVValue();
+    auto *Sub = BinaryOperator::Create(Instruction::Sub,
+                                       &IVFinal, &IVInitial, 
+                                       "", InsertBefore);
+
+    return BinaryOperator::Create(Instruction::SDiv, 
+                                  Sub, ConstantInt::get(IVFinal.getType(), 2), 
+                                  "", InsertBefore);
+}
+
+ICmpInst *llvm::LoopBisect::getLatchCmpInst(const Loop &L) const {
+    if(BasicBlock *Latch = L.getLoopLatch())
+        if(BranchInst *BI = dyn_cast_or_null<BranchInst>(Latch->getTerminator()))
+            if(BI->isConditional())
+                return dyn_cast<ICmpInst>(BI->getCondition());
+
+    return nullptr;
 }
 
 PreservedAnalyses LoopBisectPass::run(Loop &L, LoopAnalysisManager &AM,
