@@ -2,6 +2,7 @@
 #define LLVM_TRANSFORMS_SCALAR_LOOPBISECT_H
 
 #include "llvm/Pass.h"
+#include "llvm/Analysis/DomTreeUpdater.h"
 #include "llvm/Analysis/LoopAnalysisManager.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/LoopPass.h"

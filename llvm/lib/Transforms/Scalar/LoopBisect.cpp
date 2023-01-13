@@ -68,6 +68,7 @@ bool LoopBisect::splitLoopInHalf(Loop &L) const {
     // Modify the upper bound of cloned loop.
     ICmpInst *LatchCmpInst = getLatchCmpInst(*ClonedLoop);
     assert(LatchCmpInst && "Unable to find latch instruction in cloned loop");
+    LatchCmpInst->setOperand(1, Split);
     
     // Modify the lower bound of original loop.
     PHINode *IndVar = L.getInductionVariable(SE);
@@ -85,20 +86,29 @@ void LoopBisect::dumpFunction(const StringRef Msg, const Function &F) const {
 Loop *myCloneLoopWithPreheader(BasicBlock *Before, BasicBlock *LoopDomBB,
                                Loop *OrigLoop, ValueToValueMapTy &VMap,
                                const Twine &NameSuffix, LoopInfo *LI,
-                               SmallVectorImpl<BasicBlock *> &Blocks);
+                               SmallVectorImpl<BasicBlock *> &Blocks,
+                               const DominatorTree &DT,
+                               SmallVector<DominatorTree::UpdateType, 8> &TreeUpdates);
 
 Loop *LoopBisect::cloneLoop(Loop &L, BasicBlock &InsertBefore, BasicBlock &Pred) const {
     Function &F = *L.getHeader()->getParent();
     SmallVector<BasicBlock *, 4> ClonedLoopBlocks;
     ValueToValueMapTy VMap;
+    SmallVector<DominatorTree::UpdateType, 8> TreeUpdates;
 
     Loop * NewLoop = myCloneLoopWithPreheader(&InsertBefore, &Pred, &L, VMap, "",
-                                              &LI, ClonedLoopBlocks);
+                                              &LI, ClonedLoopBlocks, DT, TreeUpdates);
 
     assert(NewLoop && "Ran out of memory");
-    DEBUG_WITH_TYPE(VerboseDebug,
-                    dbgs() << "Created new loop: " << NewLoop->getName() << "\n";
-                    dumpFunction("After cloning loop:\n", F););
+    DEBUG_WITH_TYPE(VerboseDebug, {
+                        dbgs() << "Created new loop: " << NewLoop->getName() << "\n";
+                        dumpFunction("After cloning loop:\n", F);
+                        dbgs() << "DomTree updates: \n";
+                        for(auto u : TreeUpdates) {
+                            u.print(dbgs().indent(2));
+                            dbgs() << "\n";
+                        }
+                    });
 
     // Update instructions referencing the original loop basic blocks to
     // reference the corresponding block in the cloned loop.
@@ -109,6 +119,22 @@ Loop *LoopBisect::cloneLoop(Loop &L, BasicBlock &InsertBefore, BasicBlock &Pred)
 
     Pred.getTerminator()->replaceUsesOfWith(&InsertBefore,
                                             NewLoop->getLoopPreheader());
+
+    // Apply updates to dominator tree.
+    DomTreeUpdater DTU(DT, DomTreeUpdater::UpdateStrategy::Lazy);
+    DTU.applyUpdates(TreeUpdates);
+    DTU.flush(); 
+    
+    // Verification that the dominator tree and the loops are correct.
+    #ifndef NDEBUG
+        assert(DT.verify(DominatorTree::VerificationLevel::Full) &&
+               "Dominator tree is invalid");
+        L.verifyLoop();
+        NewLoop->verifyLoop();
+        if(Loop *Parent = L.getParentLoop())
+            Parent->verifyLoop();
+        LI.verify(DT);
+    #endif
 
     return NewLoop;
 }
@@ -124,14 +150,16 @@ Instruction *LoopBisect::computeSplitPoint(const Loop &L,
                                        &IVFinal, &IVInitial, 
                                        "", InsertBefore);
 
-    return BinaryOperator::Create(Instruction::SDiv, 
+    return BinaryOperator::Create(Instruction::UDiv, 
                                   Sub, ConstantInt::get(IVFinal.getType(), 2), 
                                   "", InsertBefore);
 }
 
 ICmpInst *llvm::LoopBisect::getLatchCmpInst(const Loop &L) const {
     if(BasicBlock *Latch = L.getLoopLatch())
+    // Checking whether terminator is a branch instruction
         if(BranchInst *BI = dyn_cast_or_null<BranchInst>(Latch->getTerminator()))
+            // Checking whether the branch is a comparison instruction
             if(BI->isConditional())
                 return dyn_cast<ICmpInst>(BI->getCondition());
 
@@ -156,7 +184,9 @@ PreservedAnalyses LoopBisectPass::run(Loop &L, LoopAnalysisManager &AM,
 Loop *myCloneLoopWithPreheader(BasicBlock *Before, BasicBlock *LoopDomBB,
                                Loop *OrigLoop, ValueToValueMapTy &VMap,
                                const Twine &NameSuffix, LoopInfo *LI,
-                               SmallVectorImpl<BasicBlock *> &Blocks) {
+                               SmallVectorImpl<BasicBlock *> &Blocks,
+                               const DominatorTree &DT,
+                               SmallVector<DominatorTree::UpdateType, 8> &TreeUpdates) {
     Function *F = OrigLoop->getHeader()->getParent();
     Loop *ParentLoop = OrigLoop->getParentLoop();
     DenseMap<Loop *, Loop *> LMap;
@@ -206,6 +236,17 @@ Loop *myCloneLoopWithPreheader(BasicBlock *Before, BasicBlock *LoopDomBB,
         NewLoop->addBasicBlockToLoop(NewBB, *LI);
         if(BB == CurrLoop->getHeader())
             NewLoop->moveToHeader(NewBB);
+            
+        // Update DomTree and
+        // get the immediate dominator for the original block.
+        BasicBlock *IDomBB = DT.getNode(BB)->getIDom()->getBlock();
+        assert(VMap[IDomBB] && 
+               "Expecting immediate dominator in the value map!");
+        // Insert an edge between the mapped immediate dominator
+        // and the new block.
+        TreeUpdates.emplace_back(DominatorTree::UpdateType(DominatorTree::Insert,
+                                 cast<BasicBlock>(VMap[IDomBB]), NewBB));
+
 
         Blocks.push_back(NewBB);
     }
@@ -213,6 +254,15 @@ Loop *myCloneLoopWithPreheader(BasicBlock *Before, BasicBlock *LoopDomBB,
     F->splice(Before->getIterator(), F, NewPH->getIterator());
     F->splice(Before->getIterator(), F, NewLoop->getHeader()->getIterator(),
               F->end());
+
+    // Update the dominators for new and old preheader.
+    TreeUpdates.emplace_back(DominatorTree::Delete, LoopDomBB, OrigPH);
+    TreeUpdates.emplace_back(DominatorTree::Insert, LoopDomBB, NewPH);
+
+    // Update the exiting block for the new loop.
+    TreeUpdates.emplace_back(DominatorTree::Insert, 
+                             cast<BasicBlock>(VMap[OrigLoop->getExitingBlock()]), 
+                                              OrigPH);
 
     return NewLoop;
 }
