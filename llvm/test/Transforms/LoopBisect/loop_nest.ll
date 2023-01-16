@@ -1,4 +1,4 @@
-; RUN: opt -S -passes='loop-rotate,loop-bisect' -debug-only=loop-bisect < %s 2>&1 | FileCheck %s
+; RUN: opt -S -passes='require<opt-remark-emit>,loop-rotate,loop-bisect' < %s 2>&1 | FileCheck %s
 ; REQUIRES: asserts
 ;
 ; Opts: -correlated-propagation -mem2reg -instcombine -loop-simplify -indvars -instnamer
@@ -18,6 +18,7 @@
 @A = common dso_local global [1024 x [1024 x i32]] zeroinitializer, align 4
 @B = common dso_local global [1024 x [1024 x i32]] zeroinitializer, align 4
 
+; CHECK-LABEL: dep_free
 ; CHECK-LABEL: entry:
 ; CHECK-NEXT:   br label %[[I_HEADER:.*]]
 ; CHECK:      [[I_HEADER:.*]]:
@@ -67,12 +68,12 @@ i_header:
   %exitcond5 = icmp ne i64 %i, 100
   br i1 %exitcond5, label %j_header, label %exit
 
-j_header:       
+j_header:
   %j = phi i64 [ %incj, %j_latch ], [ 0, %i_header ]
   %exitcond = icmp ne i64 %j, 100
   br i1 %exitcond, label %j_body, label %i_latch
 
-j_body:        
+j_body:
   %sub = add nsw i64 %i, -3
   %tmp = add nuw nsw i64 %i, 3
   %mul = mul nsw i64 %sub, %tmp
@@ -86,11 +87,11 @@ j_latch:
   %incj = add nuw nsw i64 %j, 1
   br label %j_header
 
-i_latch:         
+i_latch:
   %inci = add nuw nsw i64 %i, 1
   br label %i_header
 
-exit:         
+exit:
   ret void
 }
 
